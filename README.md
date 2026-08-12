@@ -1,5 +1,6 @@
 # profilarr-mcp
 
+Part of the [arr-mcps](https://github.com/SavageCore/arr-mcps) collection.
 MCP server exposing [Profilarr](https://github.com/Dictionarry-Hub/Profilarr)'s
 v1 REST API (`/api/v1`, [OpenAPI 3.1](https://dictionarry.dev)) as tools, so an
 LLM can inspect and manage your Profilarr instance: linked databases, connected
