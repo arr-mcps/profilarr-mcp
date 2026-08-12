@@ -1,6 +1,14 @@
 """MCP server exposing Profilarr's v1 REST API (https://dictionarry.dev) as tools.
 
-One tool per /api/v1 endpoint (see README for the full list). Auth is an API
+Full API coverage (see README for the operation list), exposed as 4
+resource-scoped *portmanteau* tools instead of one tool per endpoint. Each
+portmanteau tool (e.g. profilarr_databases, profilarr_backups) takes an
+`operation` enum plus an `arguments` dict; see AGENTS.md for the rationale.
+`_GROUPS` near the bottom buckets every endpoint function by resource and
+`_register_group` wraps each bucket in one dispatching MCP tool; the
+functions themselves are not tools anymore.
+
+Auth is an API
 key sent as `X-Api-Key: <key>` on every request -- either the PROFILARR_API_KEY
 env var (>=32 chars, takes precedence) or the bcrypt-stored key generated under
 Profilarr Settings > Security.
@@ -17,18 +25,21 @@ and POSTs it as multipart. Async endpoints (POST /backups, POST /databases/{id}/
 return {jobId} with HTTP 202; callers poll GET /jobs/{id} via profilarr_get_job.
 """
 
+import inspect
 import os
 import re
 import sys
 import tempfile
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import quote
 
 import httpx
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
+from fastmcp.tools import Tool
 from mcp.types import ToolAnnotations
 
+READONLY = ToolAnnotations(readOnlyHint=True)
 DESTRUCTIVE = ToolAnnotations(destructiveHint=True)
 
 # Profilarr responses are plain JSON. `dict[str, Any]` (not bare `Any`) matters;
@@ -105,21 +116,18 @@ def _f(filename: str) -> str:
 # --- System -----------------------------------------------------------------
 
 
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 async def profilarr_health() -> JSONObj:
     """Check system health. Public -- requires no API key. Returns status
     (healthy|degraded|unhealthy) and timestamp."""
     return await _req("GET", "/health")
 
 
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 async def profilarr_status() -> JSONObj:
     """Get overall system status: version, uptime, databases, arrs (with sync
     state), job queue, backups, and unread announcements."""
     return await _req("GET", "/status")
 
 
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 async def profilarr_get_openapi_spec() -> JSONObj:
     """Fetch Profilarr's resolved OpenAPI 3.1 spec as a JSON document."""
     return await _req("GET", "/openapi.json")
@@ -128,7 +136,6 @@ async def profilarr_get_openapi_spec() -> JSONObj:
 # --- Arr --------------------------------------------------------------------
 
 
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 async def profilarr_list_arr_instances() -> list[Any]:
     """List connected Radarr/Sonarr instances. Secrets (api_key) are stripped."""
     return await _req("GET", "/arr")
@@ -137,13 +144,11 @@ async def profilarr_list_arr_instances() -> list[Any]:
 # --- Databases --------------------------------------------------------------
 
 
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 async def profilarr_list_databases() -> list[Any]:
     """List linked PCD databases. Secrets (personal_access_token -> hasPat) stripped."""
     return await _req("GET", "/databases")
 
 
-@mcp.tool
 async def profilarr_create_database(
     name: str,
     repository_url: str,
@@ -178,13 +183,11 @@ async def profilarr_create_database(
     return await _req("POST", "/databases", body)
 
 
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 async def profilarr_get_database(id: int) -> JSONObj:
     """Get a single linked database by id. Secrets stripped."""
     return await _req("GET", f"/databases/{id}")
 
 
-@mcp.tool
 async def profilarr_update_database(id: int, patch: dict) -> JSONObj:
     """Partial update of a linked database. Only provided fields change; unknown
     fields are ignored. See profilarr_create_database for field-dependency rules
@@ -192,14 +195,12 @@ async def profilarr_update_database(id: int, patch: dict) -> JSONObj:
     return await _req("PATCH", f"/databases/{id}", patch)
 
 
-@mcp.tool(annotations=DESTRUCTIVE)
 async def profilarr_delete_database(id: int) -> JSONObj:
     """Unlink a database: removes the row, deletes the cloned repo from disk,
     cancels scheduled sync jobs."""
     return await _req("DELETE", f"/databases/{id}")
 
 
-@mcp.tool
 async def profilarr_sync_database(id: int) -> JSONObj:
     """Trigger a database pull (PCD sync). Async: returns {jobId} (HTTP 202);
     poll with profilarr_get_job(jobId). Note: this pulls the linked DB repo,
@@ -210,7 +211,6 @@ async def profilarr_sync_database(id: int) -> JSONObj:
 # --- Jobs -------------------------------------------------------------------
 
 
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 async def profilarr_get_job(id: int) -> JSONObj:
     """Get current status of a job-queue entry (e.g. from profilarr_create_backup
     or profilarr_sync_database). Returns status with run result when finished."""
@@ -220,20 +220,17 @@ async def profilarr_get_job(id: int) -> JSONObj:
 # --- Backups ----------------------------------------------------------------
 
 
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 async def profilarr_list_backups() -> list[Any]:
     """List backup archives on the server, newest first."""
     return await _req("GET", "/backups")
 
 
-@mcp.tool
 async def profilarr_create_backup() -> JSONObj:
     """Create a backup. Async: returns {jobId} (HTTP 202); poll with
     profilarr_get_job(jobId). The archive is sanitized (secrets stripped)."""
     return await _req("POST", "/backups")
 
 
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 async def profilarr_download_backup(filename: str) -> JSONObj:
     """Download a backup archive (sanitized on the fly) and write it to the local
     temp dir (PROFILARR_TEMP_DIR or system temp). Returns {path, filename, size}
@@ -246,26 +243,22 @@ async def profilarr_download_backup(filename: str) -> JSONObj:
     return {"path": local, "filename": os.path.basename(filename), "size": len(data)}
 
 
-@mcp.tool(annotations=DESTRUCTIVE)
 async def profilarr_delete_backup(filename: str) -> JSONObj:
     """Delete a backup archive from the server."""
     return await _req("DELETE", f"/backups/{_f(filename)}")
 
 
-@mcp.tool
 async def profilarr_upload_backup(filepath: str) -> JSONObj:
     """Upload a local .tar.gz backup to the server as multipart form data. Returns
     the stored filename/size."""
     return await _req_upload("/backups/upload", filepath)
 
 
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 async def profilarr_get_backup_settings() -> JSONObj:
     """Get backup settings (schedule, retentionDays, enabled, ...)."""
     return await _req("GET", "/backups/settings")
 
 
-@mcp.tool
 async def profilarr_update_backup_settings(
     schedule: str | None = None,
     retention_days: int | None = None,
@@ -288,24 +281,125 @@ async def profilarr_update_backup_settings(
 # --- Announcements ----------------------------------------------------------
 
 
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 async def profilarr_list_announcements() -> list[Any]:
     """List visible announcements (withdrawn/expired/version-incompatible filtered),
     newest first."""
     return await _req("GET", "/announcements")
 
 
-@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True))
 async def profilarr_get_announcement(id: str) -> JSONObj:
     """Get a single announcement by id, including its markdown body."""
     return await _req("GET", f"/announcements/{_f(id)}")
+
+
+# Resource groups for portmanteau registration. Every tool function name
+# must appear in exactly one group - see test_all_functions_grouped.
+_GROUPS: dict[str, tuple[str, ...]] = {
+    "profilarr_databases": (
+        "profilarr_create_database",
+        "profilarr_delete_database",
+        "profilarr_get_database",
+        "profilarr_list_databases",
+        "profilarr_sync_database",
+        "profilarr_update_database",
+    ),
+    "profilarr_backups": (
+        "profilarr_create_backup",
+        "profilarr_delete_backup",
+        "profilarr_download_backup",
+        "profilarr_get_backup_settings",
+        "profilarr_list_backups",
+        "profilarr_update_backup_settings",
+        "profilarr_upload_backup",
+    ),
+    "profilarr_jobs_arr": (
+        "profilarr_get_job",
+        "profilarr_list_arr_instances",
+    ),
+    "profilarr_meta": (
+        "profilarr_get_announcement",
+        "profilarr_get_openapi_spec",
+        "profilarr_health",
+        "profilarr_list_announcements",
+        "profilarr_status",
+    ),
+}
+
+
+def _op_line(name: str, fn: Any) -> str:
+    """One line of a group tool's description: signature + one-line doc."""
+    sig = ", ".join(
+        p.name if p.default is inspect.Parameter.empty else f"{p.name}={p.default!r}"
+        for p in inspect.signature(fn).parameters.values()
+    )
+    return f"- {name}({sig}) — {' '.join((fn.__doc__ or '').split())}"
+
+
+def _register_group(
+    group: str, names: tuple[str, ...], ns: dict[str, Any], readonly_names: set[str]
+) -> None:
+    """Register one dispatching tool that fans out to every function named
+    in `names`. The functions themselves are untouched - they're just
+    looked up by name instead of each becoming its own tool."""
+    fns = {n: ns[n] for n in names}
+
+    async def dispatch(
+        operation: str, arguments: JSONObj | None = None
+    ) -> JSONVal | str:
+        fn = fns.get(operation)
+        if fn is None:
+            raise ToolError(
+                f"Unknown operation {operation!r} for {group}. Valid: {', '.join(fns)}"
+            )
+        return await fn(**(arguments or {}))
+
+    dispatch.__annotations__["operation"] = Literal[names]
+    ann = READONLY if set(names) <= readonly_names else None
+    mcp.add_tool(
+        Tool.from_function(
+            dispatch,
+            name=group,
+            description=(
+                f"{group.replace('_', ' ')} operations on Profilarr. Pass `operation` and an "
+                f"`arguments` dict matching that operation's parameters.\n\n"
+                + "\n".join(_op_line(n, f) for n, f in fns.items())
+            ),
+            annotations=ann,
+        )
+    )
+
+
+def _register_tools() -> None:
+    ns = globals()
+    readonly_names: set[str] = {
+        "profilarr_download_backup",
+        "profilarr_get_announcement",
+        "profilarr_get_backup_settings",
+        "profilarr_get_database",
+        "profilarr_get_job",
+        "profilarr_get_openapi_spec",
+        "profilarr_health",
+        "profilarr_list_announcements",
+        "profilarr_list_arr_instances",
+        "profilarr_list_backups",
+        "profilarr_list_databases",
+        "profilarr_status",
+    }
+    for group, names in _GROUPS.items():
+        _register_group(group, names, ns, readonly_names)
+
+
+_register_tools()
 
 
 def main() -> None:
     global _client, TEMP_DIR
     url = os.environ.get("PROFILARR_URL")
     if not url:
-        print("PROFILARR_URL environment variable is required (e.g. https://profilarr.example.com)", file=sys.stderr)
+        print(
+            "PROFILARR_URL environment variable is required (e.g. https://profilarr.example.com)",
+            file=sys.stderr,
+        )
         raise SystemExit(1)
     TEMP_DIR = os.environ.get("PROFILARR_TEMP_DIR", tempfile.gettempdir())
     _client = build_client(url, os.environ.get("PROFILARR_API_KEY"))

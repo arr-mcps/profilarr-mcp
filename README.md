@@ -78,9 +78,24 @@ claude mcp add profilarr \
 
 ## Tools
 
-One tool per Profilarr v1 endpoint:
+**4 resource-scoped tools**, each covering multiple Profilarr v1 endpoints
+(20 total) via an `operation` parameter. Call a tool with `operation` set to
+one of its listed operations and an `arguments` dict matching that
+operation's parameters — the tool's own description (visible to your MCP
+client) lists every operation, its signature, and a one-line doc.
 
-| Tool | Endpoint |
+| Tool | Operations | Covers |
+|---|---|---|
+| `profilarr_databases` | 6 | List/create/get/update/delete/sync databases |
+| `profilarr_backups` | 7 | List/create/download/delete/upload backups, backup settings |
+| `profilarr_jobs_arr` | 2 | Job polling, Arr instance list |
+| `profilarr_meta` | 5 | Health, status, OpenAPI spec, announcements |
+
+Example: `profilarr_databases(operation="profilarr_sync_database", arguments={"id": 3})`.
+Endpoint-level naming (`profilarr_<verb>_<resource>`) is preserved as the
+`operation` value:
+
+| Operation | Endpoint |
 |---|---|
 | `profilarr_health` | `GET /health` |
 | `profilarr_status` | `GET /status` |
@@ -106,8 +121,8 @@ One tool per Profilarr v1 endpoint:
 ### Async jobs
 
 `profilarr_create_backup` and `profilarr_sync_database` return `{jobId}` with
-HTTP 202. Poll the result with `profilarr_get_job(jobId)`. Note
-`profilarr_sync_database` pulls the *linked database repo*, not an Arr sync.
+HTTP 202. Poll the result with `profilarr_jobs_arr(operation="profilarr_get_job", arguments={"id": jobId})`.
+Note `profilarr_sync_database` pulls the *linked database repo*, not an Arr sync.
 
 ### Binary endpoints
 
