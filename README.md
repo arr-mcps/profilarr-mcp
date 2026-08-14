@@ -1,6 +1,6 @@
 # profilarr-mcp
 
-Part of the [arr-mcps](https://github.com/SavageCore/arr-mcps) collection.
+Part of the [arr-mcps](https://github.com/arr-mcps/arr-mcps) collection.
 MCP server exposing [Profilarr](https://github.com/Dictionarry-Hub/Profilarr)'s
 v1 REST API (`/api/v1`, [OpenAPI 3.1](https://dictionarry.dev)) as tools, so an
 LLM can inspect and manage your Profilarr instance: linked databases, connected
@@ -36,7 +36,7 @@ the only endpoint that works without a key.
 
 ## Install
 
-Download a wheel from the [latest release](https://github.com/SavageCore/profilarr-mcp/releases/latest)
+Download a wheel from the [latest release](https://github.com/arr-mcps/profilarr-mcp/releases/latest)
 and install it as a `uv` tool (no repo checkout needed):
 
 ```bash
@@ -147,7 +147,7 @@ make help  # list all commands
 | `make clean` | Remove build artifacts |
 
 The release workflow (`.github/workflows/release.yml`) builds and publishes to
-[Releases](https://github.com/SavageCore/profilarr-mcp/releases) whenever a `v*`
+[Releases](https://github.com/arr-mcps/profilarr-mcp/releases) whenever a `v*`
 tag is pushed — so the usual flow is `make bump-patch`, commit, then tag and push.
 
 The integration suite is read-only (health/status/arr/databases/announcements)
